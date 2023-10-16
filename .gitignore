@@ -8,3 +8,9 @@ __pycache__/
 *.pt
 *.pyc
 input.txt
+
+
+# Packaging 
+build/
+dist/
+*.egg-info/
