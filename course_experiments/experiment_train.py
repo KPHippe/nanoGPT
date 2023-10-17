@@ -6,26 +6,58 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from lightning.pytorch import Trainer
 from lightning.pytorch import seed_everything
+from lightning.pytorch.profilers import PyTorchProfiler
 
 from experiment_model import LightningNanoGPT, LightningGPTConfig
 
-# TODO: setup profiling + experiment logging (probably through callbacks?)
-# TODO: setup LR scheduler
 
 seed_everything(42)
 
 # Optimizations
 torch.set_float32_matmul_precision("high")
 
+"""
+Order
+------
+1. precision (fp32, bf16) hold optimizer constant (adamW)
+2. optimizer (adamw, SGD) hold precision constant (bf16)
+3. DS (ds2, ds3) hold precision constant (bf16) # compares to adamW and bf16
+
+"""
+
+# Experiment optimizations
+precision = None  # default is None, option is 'bf16'
+optimizer = "adamw"  # default is Adamw, option is 'SGD', ('cpuadam', 'fusedadam' needed for ds2, ds3 respectively)
+acceleratation_strategy = None  # default is None, option is 'ds2', 'ds3'
+
+
+optims = f"{'fp32' if not precision else 'bf16'}-{optimizer}-{acceleratation_strategy if acceleratation_strategy else 'noDS'}"
+
 
 # Define model with defaults from char shakespeare model
 vocab_size = 65
 block_size = 256
-n_layer = 6
-n_head = 6
-n_embd = 384
 dropout = 0.2
 compile = False  # Doesn't work too well with PL it appears?
+
+# # Small
+# n_layer = 6
+# n_head = 6
+# n_embd = 384
+# model_name = "small"
+
+# Med
+# n_layer = 8
+# n_head = 8
+# n_embd = 512
+# model_name = "med"
+
+# Large
+n_layer = 12
+n_head = 12
+n_embd = 768
+model_name = "large"
+
 
 weight_decay = 1e-1
 learning_rate = 1e-3
@@ -37,7 +69,9 @@ dset_root = "../data"
 dataset = "shakespeare_char"
 batch_size = 64
 
-max_steps = 5000
+max_steps = 100
+dirpath = f"../experiment-logs/{model_name}-{optims}"
+filename = "pt-profile"
 
 config = LightningGPTConfig(
     vocab_size=vocab_size,
@@ -50,6 +84,7 @@ config = LightningGPTConfig(
     learning_rate=learning_rate,
     betas=betas,
     device_type=device_type,
+    optimizer=optimizer,
 )
 
 model = LightningNanoGPT(config)
@@ -98,13 +133,31 @@ val_dloader = DataLoader(
 
 
 # Define trainer and train
+
+profiler = PyTorchProfiler(dirpath=dirpath, filename=filename, profile_memory=True)
+
+if acceleratation_strategy and acceleratation_strategy.lower() == "ds2":
+    strategy = "deepspeed_stage_2_offload"
+elif acceleratation_strategy and acceleratation_strategy.lower() == "ds3":
+    strategy = "deepspeed_stage_3"
+else:
+    strategy = "auto"
+
 trainer = Trainer(
+    profiler=profiler,
+    strategy=strategy,
     max_steps=max_steps,
-    gradient_clip_val=1.0,
     log_every_n_steps=10,
-    val_check_interval=100,
+    val_check_interval=None,
     check_val_every_n_epoch=None,
-    limit_val_batches=15,
     num_sanity_val_steps=0,  # Disable validation on startup
+    precision=precision,
+    benchmark=True,
 )
-trainer.fit(model, train_dataloaders=train_dloader, val_dataloaders=val_dloader)
+# Easy way to disable validation is not provide a val_dataloader
+trainer.fit(model, train_dataloaders=train_dloader)
+
+# Save cuda memory summary to file
+with open(os.path.join(dirpath, f"{filename}-memory-summary.txt"), "w") as f:
+    f.write(torch.cuda.memory_summary())
+print(torch.cuda.memory_summary())

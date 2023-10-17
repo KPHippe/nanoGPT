@@ -1,4 +1,3 @@
-import torch
 from lightning.pytorch import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
@@ -14,6 +13,7 @@ class LightningGPTConfig(GPTConfig):
     learning_rate: float = 1e-4
     betas: tuple = (0.9, 0.95)
     device_type: str = "cuda"
+    optimizer: str = "adam"
 
 
 # Setup nanoGPT as lightning model
@@ -43,4 +43,5 @@ class LightningNanoGPT(LightningModule):
             learning_rate=self.config.learning_rate,
             betas=self.config.betas,
             device_type=self.config.device_type,
+            optimizer_type=self.config.optimizer,
         )
