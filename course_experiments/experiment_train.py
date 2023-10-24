@@ -22,16 +22,23 @@ Order
 1. precision (fp32, bf16) hold optimizer constant (adamW)
 2. optimizer (adamw, SGD) hold precision constant (bf16)
 3. DS (ds2, ds3) hold precision constant (bf16) # compares to adamW and bf16
+4. gradient accumulation + batch size halving ((1, 2), (64, 32))
 
 """
 
 # Experiment optimizations
-precision = None  # default is None, option is 'bf16'
+precision = "bf16"  # default is None, option is 'bf16'
 optimizer = "adamw"  # default is Adamw, option is 'SGD', ('cpuadam', 'fusedadam' needed for ds2, ds3 respectively)
 acceleratation_strategy = None  # default is None, option is 'ds2', 'ds3'
 
+bs = 32
+grad_acc = 2
 
-optims = f"{'fp32' if not precision else 'bf16'}-{optimizer}-{acceleratation_strategy if acceleratation_strategy else 'noDS'}"
+optims = ""
+optims += f"{'fp32' if not precision else 'bf16'}"
+optims += f"-{optimizer}"
+optims += f"-{acceleratation_strategy if acceleratation_strategy else 'noDS'}"
+optims += f"-bs{bs}-ga{grad_acc}"
 
 
 # Define model with defaults from char shakespeare model
@@ -41,10 +48,10 @@ dropout = 0.2
 compile = False  # Doesn't work too well with PL it appears?
 
 # # Small
-# n_layer = 6
-# n_head = 6
-# n_embd = 384
-# model_name = "small"
+n_layer = 6
+n_head = 6
+n_embd = 384
+model_name = "small"
 
 # Med
 # n_layer = 8
@@ -53,10 +60,10 @@ compile = False  # Doesn't work too well with PL it appears?
 # model_name = "med"
 
 # Large
-n_layer = 12
-n_head = 12
-n_embd = 768
-model_name = "large"
+# n_layer = 12
+# n_head = 12
+# n_embd = 768
+# model_name = "large"
 
 
 weight_decay = 1e-1
@@ -67,7 +74,7 @@ device = "cuda"
 
 dset_root = "../data"
 dataset = "shakespeare_char"
-batch_size = 64
+batch_size = bs
 
 max_steps = 100
 dirpath = f"../experiment-logs/{model_name}-{optims}"
@@ -104,7 +111,7 @@ class CharDataset(Dataset):
         )
 
     def __len__(self) -> int:
-        return max_steps * batch_size
+        return max_steps * (batch_size * grad_acc)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         # Roughly equivalent to original training, instead of getting a full batch,
@@ -153,6 +160,7 @@ trainer = Trainer(
     num_sanity_val_steps=0,  # Disable validation on startup
     precision=precision,
     benchmark=True,
+    accumulate_grad_batches=grad_acc,
 )
 # Easy way to disable validation is not provide a val_dataloader
 trainer.fit(model, train_dataloaders=train_dloader)
