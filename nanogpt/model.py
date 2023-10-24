@@ -15,6 +15,14 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+try:
+    from deepspeed.ops.adam import DeepSpeedCPUAdam
+    from deepspeed.ops.adam import FusedAdam
+
+    ds_available = True
+except ImportError:
+    ds_available = False
+
 
 class LayerNorm(nn.Module):
     """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
@@ -315,7 +323,9 @@ class GPT(nn.Module):
 
         return model
 
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+    def configure_optimizers(
+        self, weight_decay, learning_rate, betas, device_type, optimizer_type="adam"
+    ):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
@@ -336,14 +346,39 @@ class GPT(nn.Module):
         print(
             f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
         )
-        # Create AdamW optimizer and use the fused version if it is available
-        fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == "cuda"
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(
-            optim_groups, lr=learning_rate, betas=betas, **extra_args
-        )
-        print(f"using fused AdamW: {use_fused}")
+
+        if optimizer_type.lower() == "adamw":
+            # Create AdamW optimizer and use the fused version if it is available
+            fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
+            use_fused = fused_available and device_type == "cuda"
+            # manually set to false for now, want to put as much on GPU as possible
+            # TODO: remove when done with experiments
+            use_fused = False
+            extra_args = dict(fused=True) if use_fused else dict()
+            optimizer = torch.optim.AdamW(
+                optim_groups, lr=learning_rate, betas=betas, **extra_args
+            )
+            print(f"using fused AdamW: {use_fused}")
+        elif optimizer_type.lower() == "sgd":
+            optimizer = torch.optim.SGD(optim_groups, lr=learning_rate, momentum=0.9)
+            print("Using SGD")
+
+        elif optimizer_type.lower() == "cpuadam":
+            if not ds_available:
+                raise ValueError(
+                    "DeepSpeedCPUAdam is not available. Please install deepspeed"
+                )
+            optimizer = DeepSpeedCPUAdam(optim_groups, lr=learning_rate, betas=betas)
+
+        elif optimizer_type.lower() == "fusedadam":
+            if not ds_available:
+                raise ValueError(
+                    "DeepSpeedCPUAdam is not available. Please install deepspeed"
+                )
+            optimizer = FusedAdam(optim_groups, lr=learning_rate, betas=betas)
+
+        else:
+            raise ValueError(f"Unknown optimizer type: {optimizer_type}")
 
         return optimizer
 
