@@ -14,3 +14,8 @@ input.txt
 build/
 dist/
 *.egg-info/
+
+# Experiment info
+logs*/
+lightning_logs/
+experiment-logs/
